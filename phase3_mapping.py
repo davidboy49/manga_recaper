@@ -14,7 +14,15 @@ def load_data():
     if not os.path.exists(SCRIPT_PATH) or not os.path.exists(CATALOG_PATH):
         raise FileNotFoundError("Missing script.txt or scene_catalog.json.")
     with open(SCRIPT_PATH, 'r', encoding='utf-8') as f:
-        script_lines = [line.strip() for line in f.readlines() if line.strip()]
+        paragraphs = [line.strip() for line in f.readlines() if line.strip()]
+    
+    sentence_endings = re.compile(r'(?<=[.!?])\s+')
+    script_lines = []
+    for para in paragraphs:
+        for s in sentence_endings.split(para):
+            if s.strip():
+                script_lines.append(s.strip())
+                
     with open(CATALOG_PATH, 'r', encoding='utf-8') as f:
         scene_catalog = json.load(f)
     return script_lines, scene_catalog
@@ -54,21 +62,38 @@ def extract_json_from_text(text):
 
 
 def run_mapping():
-    print("[*] Starting Phase 3: Timeline Mapping (Batched)...")
+    print("[*] Starting Phase 3: Timeline Mapping (Batched with Sliding Window)...")
     try:
         script_lines, scene_catalog = load_data()
     except Exception as e:
         print(f"[!] Error loading inputs: {e}")
         return
 
+    num_lines = len(script_lines)
+    num_panels = len(scene_catalog)
     batch_size = 5
     timeline = []
     
-    print(f"[*] Processing {len(script_lines)} lines in batches of {batch_size}...")
+    # Window size: how many local panels to provide for each batch
+    window_size = 20
     
-    for start_idx in range(0, len(script_lines), batch_size):
-        end_idx = min(start_idx + batch_size, len(script_lines))
+    print(f"[*] Processing {num_lines} script lines in batches of {batch_size} (using {window_size}-panel sliding window)...")
+    
+    for start_idx in range(0, num_lines, batch_size):
+        end_idx = min(start_idx + batch_size, num_lines)
         batch_lines = script_lines[start_idx:end_idx]
+        
+        # Calculate sliding window of chronological panels to avoid token context overflow (LM Studio cap)
+        center_ratio = ((start_idx + end_idx) / 2) / num_lines
+        center_panel = center_ratio * num_panels
+        window_start = max(0, int(center_panel - window_size // 2))
+        window_end = min(num_panels, window_start + window_size)
+        
+        # Ensure we always get a full window size if possible
+        if (window_end - window_start) < window_size and window_start > 0:
+            window_start = max(0, window_end - window_size)
+            
+        local_catalog = scene_catalog[window_start:window_end]
         
         batch_manifest = []
         for i, line in enumerate(batch_lines):
@@ -87,18 +112,18 @@ def run_mapping():
             "Do NOT include any reasons, explanations, or extra fields in the objects. "
             "Output ONLY the JSON list inside a ```json ... ``` block.\n\n"
             f"AVAILABLE INPUTS:\n"
-            f"Visual Catalog: {json.dumps(scene_catalog, indent=2)}\n\n"
+            f"Visual Catalog (chronological segment): {json.dumps(local_catalog, indent=2)}\n\n"
             f"Audio Segments Manifest: {json.dumps(batch_manifest, indent=2)}"
         )
         
         batch_timeline = None
         try:
-            print(f"[*] Sending batch {start_idx // batch_size + 1} ({start_idx} to {end_idx - 1}) to Gemma...")
+            print(f"[*] Sending batch {start_idx // batch_size + 1} (panels {window_start} to {window_end - 1}) to Gemma...")
             response = client.chat.completions.create(
                 model="google/gemma-4-e4b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=1500  # Ample room for 5 output items
+                max_tokens=3500
             )
             
             raw_response = response.choices[0].message.content.strip()
@@ -135,10 +160,9 @@ def run_mapping():
         if not batch_timeline:
             print(f"[*] Using proportional fallback for batch {start_idx // batch_size + 1}...")
             batch_timeline = []
-            num_panels = len(scene_catalog)
             for i, line in enumerate(batch_lines):
                 global_idx = start_idx + i
-                panel_idx = min(math.floor((global_idx / len(script_lines)) * num_panels), num_panels - 1)
+                panel_idx = min(math.floor((global_idx / num_lines) * num_panels), num_panels - 1)
                 batch_timeline.append({
                     "audio_file": f"line_{global_idx:03d}.wav",
                     "text": line,
@@ -161,7 +185,7 @@ def run_mapping():
             if last_valid_panel:
                 panel_file = last_valid_panel
             else:
-                panel_idx = min(math.floor((i / len(script_lines)) * len(scene_catalog)), len(scene_catalog) - 1)
+                panel_idx = min(math.floor((i / num_lines) * num_panels), num_panels - 1)
                 panel_file = scene_catalog[panel_idx]["panel_file"]
                 last_valid_panel = panel_file
         

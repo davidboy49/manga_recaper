@@ -1,4 +1,5 @@
 import os
+import re
 import torch
 import soundfile as sf
 import numpy as np
@@ -16,10 +17,18 @@ def ensure_directories():
 
 
 def load_script(path):
-    """Read the script line-by-line, ignoring empty lines."""
+    """Read the script and split into individual sentences."""
     with open(path, 'r', encoding='utf-8') as f:
-        lines = [line.strip() for line in f.readlines() if line.strip()]
-    return lines
+        paragraphs = [line.strip() for line in f.readlines() if line.strip()]
+    
+    # Regex to split paragraphs by sentence-ending punctuation (., !, ?) followed by whitespace
+    sentence_endings = re.compile(r'(?<=[.!?])\s+')
+    sentences = []
+    for para in paragraphs:
+        for s in sentence_endings.split(para):
+            if s.strip():
+                sentences.append(s.strip())
+    return sentences
 
 
 def generate_voiceovers():
