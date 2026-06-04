@@ -10,8 +10,6 @@ from tqdm import tqdm
 IMAGE_DIR = r"C:\Users\User\PycharmProjects\pythonProject2\manga_panels"
 CATALOG_OUT_PATH = r"C:\Users\User\PycharmProjects\pythonProject2\scene_catalog.json"
 
-# --- LM Studio Local Client ---
-client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 
 def encode_image(image_path):
@@ -40,24 +38,31 @@ def encode_image(image_path):
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 
-def process_panels():
-    if not os.path.exists(IMAGE_DIR):
-        print(f"[!] Error: Image directory not found at {IMAGE_DIR}")
+def process_panels(image_dir=None, catalog_out_path=None, api_url="http://localhost:1234/v1", api_key="lm-studio", model="google/gemma-4-e4b"):
+    if image_dir is None:
+        image_dir = IMAGE_DIR
+    if catalog_out_path is None:
+        catalog_out_path = CATALOG_OUT_PATH
+
+    client = OpenAI(base_url=api_url, api_key=api_key)
+
+    if not os.path.exists(image_dir):
+        print(f"[!] Error: Image directory not found at {image_dir}")
         return
 
     # Grab supported images and sort them so they stay in chronological order
     valid_ext = ('.png', '.jpg', '.jpeg', '.webp')
-    image_files = sorted([f for f in os.listdir(IMAGE_DIR) if f.lower().endswith(valid_ext)])
+    image_files = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(valid_ext)])
 
     if not image_files:
-        print(f"[!] No images found in {IMAGE_DIR}")
+        print(f"[!] No images found in {image_dir}")
         return
 
     # Load existing catalog for caching/checkpointing
     scene_catalog = {}
-    if os.path.exists(CATALOG_OUT_PATH):
+    if os.path.exists(catalog_out_path):
         try:
-            with open(CATALOG_OUT_PATH, 'r', encoding='utf-8') as f:
+            with open(catalog_out_path, 'r', encoding='utf-8') as f:
                 existing_list = json.load(f)
                 # Filter out default placeholder texts and error descriptions to force reprocessing
                 for item in existing_list:
@@ -68,7 +73,7 @@ def process_panels():
                         "Please provide the manga panel image" not in desc and
                         len(desc.strip()) > 10):
                         scene_catalog[item["panel_file"]] = desc
-            print(f"[*] Loaded {len(scene_catalog)} valid existing descriptions from {CATALOG_OUT_PATH}")
+            print(f"[*] Loaded {len(scene_catalog)} valid existing descriptions from {catalog_out_path}")
         except Exception as e:
             print(f"[!] Error reading existing catalog: {e}. Starting fresh.")
 
@@ -79,13 +84,13 @@ def process_panels():
         if img_name in scene_catalog:
             continue
 
-        img_path = os.path.join(IMAGE_DIR, img_name)
+        img_path = os.path.join(image_dir, img_name)
         base64_image = encode_image(img_path)
 
         try:
             # Send the base64 image to local Gemma Vision via LM Studio
             response = client.chat.completions.create(
-                model="google/gemma-4-e4b",  # Specify the loaded Gemma 4 model
+                model=model,  # Use the specified model
                 messages=[
                     {
                         "role": "user",
@@ -115,17 +120,17 @@ def process_panels():
         # Save checkpoint immediately
         try:
             output_list = [{"panel_file": k, "description": v} for k, v in sorted(scene_catalog.items())]
-            with open(CATALOG_OUT_PATH, 'w', encoding='utf-8') as f:
+            with open(catalog_out_path, 'w', encoding='utf-8') as f:
                 json.dump(output_list, f, indent=4)
         except Exception as checkpoint_err:
             print(f"[!] Error saving checkpoint: {checkpoint_err}")
 
     # Final write to confirm everything is sorted and formatted
     output_list = [{"panel_file": k, "description": v} for k, v in sorted(scene_catalog.items())]
-    with open(CATALOG_OUT_PATH, 'w', encoding='utf-8') as f:
+    with open(catalog_out_path, 'w', encoding='utf-8') as f:
         json.dump(output_list, f, indent=4)
 
-    print(f"\n[*] Phase 2 Complete. Scene catalog saved to {CATALOG_OUT_PATH}")
+    print(f"\n[*] Phase 2 Complete. Scene catalog saved to {catalog_out_path}")
 
 
 if __name__ == "__main__":

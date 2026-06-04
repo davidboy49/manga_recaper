@@ -8,7 +8,10 @@ __pycache__/
 .env*
 
 # Large media files and build outputs
-final_recap_video.mp4
-test_recap_video.mp4
+*.mp4
 processed_panels/
-generated_audio/
+generated_audio*/
+manga_panel*/
+script_*.txt
+scene_catalog*.json
+timeline_map*.json

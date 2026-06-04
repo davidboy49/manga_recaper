@@ -13,10 +13,12 @@ AUDIO_DIR = r"C:\Users\User\PycharmProjects\pythonProject2\generated_audio"
 VIDEO_OUT = r"C:\Users\User\PycharmProjects\pythonProject2\final_recap_video.mp4"
 
 
-def load_timeline():
-    if not os.path.exists(TIMELINE_PATH):
-        raise FileNotFoundError(f"Timeline blueprint missing at {TIMELINE_PATH}")
-    with open(TIMELINE_PATH, 'r', encoding='utf-8') as f:
+def load_timeline(timeline_path=None):
+    if timeline_path is None:
+        timeline_path = TIMELINE_PATH
+    if not os.path.exists(timeline_path):
+        raise FileNotFoundError(f"Timeline blueprint missing at {timeline_path}")
+    with open(timeline_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -204,11 +206,20 @@ class SceneFrameGenerator:
         return np.array(frame)
 
 
-def assemble_video():
+def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out=None, fps=30):
+    if timeline_path is None:
+        timeline_path = TIMELINE_PATH
+    if image_dir is None:
+        image_dir = IMAGE_DIR
+    if audio_dir is None:
+        audio_dir = AUDIO_DIR
+    if video_out is None:
+        video_out = VIDEO_OUT
+
     print("[*] Starting Upgraded Phase 4: Multi-Threaded Video Assembly...")
 
     try:
-        timeline = load_timeline()
+        timeline = load_timeline(timeline_path)
     except Exception as e:
         print(f"[!] Error loading timeline: {e}")
         return
@@ -217,8 +228,8 @@ def assemble_video():
 
     print(f"[*] Compiling {len(timeline)} scenes...")
     for idx, scene in enumerate(timeline):
-        audio_path = os.path.join(AUDIO_DIR, scene["audio_file"])
-        orig_image_path = os.path.join(IMAGE_DIR, scene["panel_file"])
+        audio_path = os.path.join(audio_dir, scene["audio_file"])
+        orig_image_path = os.path.join(image_dir, scene["panel_file"])
 
         if not os.path.exists(audio_path) or not os.path.exists(orig_image_path):
             print(f"[!] Warning: Missing files for Scene {idx} (Audio: {scene['audio_file']}, Image: {scene['panel_file']}). Skipping.")
@@ -267,27 +278,27 @@ def assemble_video():
     try:
         print("[*] Attempting NVIDIA GPU hardware acceleration (h264_nvenc)...")
         final_video.write_videofile(
-            VIDEO_OUT,
-            fps=15,
+            video_out,
+            fps=fps,
             codec="h264_nvenc",
             audio_codec="aac",
             threads=24,
             preset="fast"
         )
-        print(f"\n[*] SUCCESS: Final recap video rendered at {VIDEO_OUT}")
+        print(f"\n[*] SUCCESS: Final recap video rendered at {video_out}")
 
     except Exception as e:
         print(f"\n[!] Render Error using NVENC: {e}")
         print("[*] Falling back to standard CPU rendering (libx264)...")
         final_video.write_videofile(
-            VIDEO_OUT,
-            fps=15,
+            video_out,
+            fps=fps,
             codec="libx264",
             audio_codec="aac",
             threads=24,
             preset="ultrafast"
         )
-        print(f"\n[*] SUCCESS: Final recap video rendered at {VIDEO_OUT}")
+        print(f"\n[*] SUCCESS: Final recap video rendered at {video_out}")
 
 
 if __name__ == "__main__":

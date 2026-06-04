@@ -11,9 +11,9 @@ SCRIPT_PATH = r"C:\Users\User\PycharmProjects\pythonProject2\script.txt"
 AUDIO_OUT_DIR = r"C:\Users\User\PycharmProjects\pythonProject2\generated_audio"
 
 
-def ensure_directories():
+def ensure_directories(audio_out_dir):
     """Ensure output directories exist."""
-    os.makedirs(AUDIO_OUT_DIR, exist_ok=True)
+    os.makedirs(audio_out_dir, exist_ok=True)
 
 
 def load_script(path):
@@ -31,8 +31,13 @@ def load_script(path):
     return sentences
 
 
-def generate_voiceovers():
-    ensure_directories()
+def generate_voiceovers(script_path=None, audio_out_dir=None):
+    if script_path is None:
+        script_path = SCRIPT_PATH
+    if audio_out_dir is None:
+        audio_out_dir = AUDIO_OUT_DIR
+
+    ensure_directories(audio_out_dir)
 
     # 1. Check CUDA availability for RTX 4060 Ti
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -46,12 +51,12 @@ def generate_voiceovers():
         return
 
     # 2. Load the script
-    if not os.path.exists(SCRIPT_PATH):
-        print(f"[!] Error: Script not found at {SCRIPT_PATH}")
+    if not os.path.exists(script_path):
+        print(f"[!] Error: Script not found at {script_path}")
         return
 
-    script_lines = load_script(SCRIPT_PATH)
-    print(f"[*] Found {len(script_lines)} lines in script.txt")
+    script_lines = load_script(script_path)
+    print(f"[*] Found {len(script_lines)} lines in script: {script_path}")
 
     # 3. Process each line
     print("[*] Starting Phase 1: TTS Generation...")
@@ -70,7 +75,7 @@ def generate_voiceovers():
                 final_audio = np.concatenate(all_audio)
 
                 # Format output filename (e.g., line_001.wav)
-                output_filename = os.path.join(AUDIO_OUT_DIR, f"line_{i:03d}.wav")
+                output_filename = os.path.join(audio_out_dir, f"line_{i:03d}.wav")
 
                 # Save via soundfile (Kokoro operates at 24000 Hz)
                 sf.write(output_filename, final_audio, 24000)

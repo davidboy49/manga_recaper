@@ -7,13 +7,17 @@ from openai import OpenAI
 SCRIPT_PATH = r"C:\Users\User\PycharmProjects\pythonProject2\script.txt"
 CATALOG_PATH = r"C:\Users\User\PycharmProjects\pythonProject2\scene_catalog.json"
 TIMELINE_OUT_PATH = r"C:\Users\User\PycharmProjects\pythonProject2\timeline_map.json"
-client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
 
 
-def load_data():
-    if not os.path.exists(SCRIPT_PATH) or not os.path.exists(CATALOG_PATH):
-        raise FileNotFoundError("Missing script.txt or scene_catalog.json.")
-    with open(SCRIPT_PATH, 'r', encoding='utf-8') as f:
+def load_data(script_path=None, catalog_path=None):
+    if script_path is None:
+        script_path = SCRIPT_PATH
+    if catalog_path is None:
+        catalog_path = CATALOG_PATH
+
+    if not os.path.exists(script_path) or not os.path.exists(catalog_path):
+        raise FileNotFoundError(f"Missing script path ({script_path}) or catalog path ({catalog_path}).")
+    with open(script_path, 'r', encoding='utf-8') as f:
         paragraphs = [line.strip() for line in f.readlines() if line.strip()]
     
     sentence_endings = re.compile(r'(?<=[.!?])\s+')
@@ -23,7 +27,7 @@ def load_data():
             if s.strip():
                 script_lines.append(s.strip())
                 
-    with open(CATALOG_PATH, 'r', encoding='utf-8') as f:
+    with open(catalog_path, 'r', encoding='utf-8') as f:
         scene_catalog = json.load(f)
     return script_lines, scene_catalog
 
@@ -61,10 +65,19 @@ def extract_json_from_text(text):
     return text.strip()
 
 
-def run_mapping():
+def run_mapping(script_path=None, catalog_path=None, timeline_out_path=None, api_url="http://localhost:1234/v1", api_key="lm-studio", model="google/gemma-4-e4b"):
+    if script_path is None:
+        script_path = SCRIPT_PATH
+    if catalog_path is None:
+        catalog_path = CATALOG_PATH
+    if timeline_out_path is None:
+        timeline_out_path = TIMELINE_OUT_PATH
+
+    client = OpenAI(base_url=api_url, api_key=api_key)
+
     print("[*] Starting Phase 3: Timeline Mapping (Batched with Sliding Window)...")
     try:
-        script_lines, scene_catalog = load_data()
+        script_lines, scene_catalog = load_data(script_path, catalog_path)
     except Exception as e:
         print(f"[!] Error loading inputs: {e}")
         return
@@ -118,9 +131,9 @@ def run_mapping():
         
         batch_timeline = None
         try:
-            print(f"[*] Sending batch {start_idx // batch_size + 1} (panels {window_start} to {window_end - 1}) to Gemma...")
+            print(f"[*] Sending batch {start_idx // batch_size + 1} (panels {window_start} to {window_end - 1}) to model {model}...")
             response = client.chat.completions.create(
-                model="google/gemma-4-e4b",
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=3500
@@ -200,9 +213,9 @@ def run_mapping():
     
     # Save output map
     try:
-        with open(TIMELINE_OUT_PATH, 'w', encoding='utf-8') as f:
+        with open(timeline_out_path, 'w', encoding='utf-8') as f:
             json.dump(timeline, f, indent=4)
-        print(f"[*] Timeline saved to {TIMELINE_OUT_PATH}")
+        print(f"[*] Timeline saved to {timeline_out_path}")
     except Exception as e:
         print(f"[!] Error saving timeline: {e}")
 
