@@ -64,16 +64,24 @@ def run_pipeline(args):
         image_dir=args.panels,
         audio_dir=args.audio_dir,
         video_out=args.output,
-        fps=args.fps
+        fps=args.fps,
+        split_scenes=args.split_scenes,
+        split_out_dir=args.split_dir
     )
 
     print("\n==================================================")
     print("AUTOMATION WORKFLOW COMPLETION CHECK")
     print("==================================================")
-    if os.path.exists(args.output):
-        print(f"[SUCCESS] Final recap video is ready at: {args.output}")
+    if args.split_scenes:
+        if os.path.exists(args.split_dir) and len(os.listdir(args.split_dir)) > 0:
+            print(f"[SUCCESS] Split scene videos are ready in: {args.split_dir}")
+        else:
+            print("[FAILURE] Pipeline completed, but split scene videos were not found.")
     else:
-        print("[FAILURE] Pipeline completed, but output video was not found.")
+        if os.path.exists(args.output):
+            print(f"[SUCCESS] Final recap video is ready at: {args.output}")
+        else:
+            print("[FAILURE] Pipeline completed, but output video was not found.")
 
 
 def main():
@@ -91,6 +99,8 @@ def main():
     default_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY") or "lm-studio"
     parser.add_argument("-k", "--api-key", default=default_key, help="API key (defaults to OPENROUTER_API_KEY or OPENAI_API_KEY env vars)")
     parser.add_argument("-m", "--model", default="google/gemma-4-e4b", help="Model name to query (e.g. google/gemma-4-26b-a4b-it:free)")
+    parser.add_argument("--split-scenes", action="store_true", help="Render individual scene clips instead of one video")
+    parser.add_argument("--split-dir", default="split_scenes", help="Directory to save split scene videos")
 
     args = parser.parse_args()
     run_pipeline(args)

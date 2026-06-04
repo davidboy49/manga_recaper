@@ -206,7 +206,28 @@ class SceneFrameGenerator:
         return np.array(frame)
 
 
-def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out=None, fps=30):
+def make_static_frame(orig_image_path, target_width=1280, target_height=720):
+    orig_img = Image.open(orig_image_path).convert('RGB')
+    orig_w, orig_h = orig_img.size
+    
+    # Calculate scale factor to fit within target dimensions preserving aspect ratio
+    scale = min(target_width / orig_w, target_height / orig_h)
+    new_w = int(orig_w * scale)
+    new_h = int(orig_h * scale)
+    
+    resized = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    
+    # Create black canvas
+    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
+    # Paste centered
+    x_pos = (target_width - new_w) // 2
+    y_pos = (target_height - new_h) // 2
+    canvas.paste(resized, (x_pos, y_pos))
+    
+    return np.array(canvas)
+
+
+def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out=None, fps=30, split_scenes=False, split_out_dir=None):
     if timeline_path is None:
         timeline_path = TIMELINE_PATH
     if image_dir is None:
@@ -222,6 +243,62 @@ def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out
         timeline = load_timeline(timeline_path)
     except Exception as e:
         print(f"[!] Error loading timeline: {e}")
+        return
+
+    if split_scenes:
+        if split_out_dir is None:
+            split_out_dir = r"C:\Users\User\PycharmProjects\pythonProject2\split_scenes"
+        os.makedirs(split_out_dir, exist_ok=True)
+        print(f"[*] Split scenes mode enabled. Output directory: {split_out_dir}")
+        print(f"[*] Rendering {len(timeline)} individual scene videos...")
+        
+        for idx, scene in enumerate(timeline):
+            audio_path = os.path.join(audio_dir, scene["audio_file"])
+            orig_image_path = os.path.join(image_dir, scene["panel_file"])
+
+            if not os.path.exists(audio_path) or not os.path.exists(orig_image_path):
+                print(f"[!] Warning: Missing files for Scene {idx} (Audio: {scene['audio_file']}, Image: {scene['panel_file']}). Skipping.")
+                continue
+
+            try:
+                audio_clip = AudioFileClip(audio_path)
+                duration = audio_clip.duration
+                
+                # Make static frame
+                frame_np = make_static_frame(orig_image_path)
+                img_clip = VideoClip(lambda t: frame_np).with_duration(duration)
+                img_clip = img_clip.with_audio(audio_clip)
+                
+                audio_name_no_ext = os.path.splitext(scene["audio_file"])[0]
+                out_path = os.path.join(split_out_dir, f"scene_{idx:03d}_{audio_name_no_ext}.mp4")
+                print(f"[*] Rendering scene {idx} to {out_path} ({duration:.2f}s)...")
+                
+                try:
+                    img_clip.write_videofile(
+                        out_path,
+                        fps=fps,
+                        codec="h264_nvenc",
+                        audio_codec="aac",
+                        threads=24,
+                        preset="fast",
+                        logger=None
+                    )
+                except Exception as e:
+                    print(f"[-] GPU render failed for scene {idx}: {e}. Retrying with CPU...")
+                    img_clip.write_videofile(
+                        out_path,
+                        fps=fps,
+                        codec="libx264",
+                        audio_codec="aac",
+                        threads=24,
+                        preset="ultrafast",
+                        logger=None
+                    )
+                print(f"[+] Rendered scene {idx}")
+                audio_clip.close()
+                img_clip.close()
+            except Exception as e:
+                print(f"[!] Error building split clip {idx}: {e}")
         return
 
     video_clips = []
