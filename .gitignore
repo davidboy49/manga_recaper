@@ -18,3 +18,6 @@ scene_catalog*.json
 timeline_map*.json
 mapped_output_2/
 split_scenes/
+build/
+dist/
+*.spec
