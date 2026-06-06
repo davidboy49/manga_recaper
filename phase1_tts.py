@@ -31,11 +31,30 @@ def load_script(path):
     return sentences
 
 
-def generate_voiceovers(script_path=None, audio_out_dir=None):
+def generate_voiceovers(script_path=None, audio_out_dir=None, voice=None, speed=None):
     if script_path is None:
         script_path = SCRIPT_PATH
     if audio_out_dir is None:
         audio_out_dir = AUDIO_OUT_DIR
+
+    # Load defaults from config.json if available
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    if voice is None or speed is None:
+        import json
+        loaded_voice = "af_heart"
+        loaded_speed = 1.0
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                    loaded_voice = config_data.get("tts_voice", loaded_voice)
+                    loaded_speed = float(config_data.get("tts_speed", loaded_speed))
+            except Exception:
+                pass
+        if voice is None:
+            voice = loaded_voice
+        if speed is None:
+            speed = loaded_speed
 
     ensure_directories(audio_out_dir)
 
@@ -59,11 +78,11 @@ def generate_voiceovers(script_path=None, audio_out_dir=None):
     print(f"[*] Found {len(script_lines)} lines in script: {script_path}")
 
     # 3. Process each line
-    print("[*] Starting Phase 1: TTS Generation...")
+    print(f"[*] Starting Phase 1: TTS Generation (Voice: {voice}, Speed: {speed})...")
     for i, text in enumerate(tqdm(script_lines, desc="Generating Audio")):
         try:
             # generator yields (graphemes, phonemes, audio_chunk)
-            generator = pipeline(text, voice='af_heart', speed=1.0)
+            generator = pipeline(text, voice=voice, speed=speed)
 
             all_audio = []
             for graphemes, phonemes, audio_chunk in generator:

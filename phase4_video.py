@@ -67,27 +67,51 @@ def create_blurred_background(orig_img, target_width=1280, target_height=720):
 
 class SceneFrameGenerator:
     def __init__(self, orig_image_path, text, duration, scene_idx, target_width=1280, target_height=720):
-        self.orig_img = Image.open(orig_image_path).convert('RGB')
-        self.orig_w, self.orig_h = self.orig_img.size
         self.text = text
         self.duration = duration
         self.scene_idx = scene_idx
         self.target_width = target_width
         self.target_height = target_height
         
-        # Precompute background and vignette
-        self.bg_blurred = create_blurred_background(self.orig_img, target_width, target_height)
-        self.vignette_alpha = create_vignette_alpha_mask(target_width, target_height)
-        
         # Action/Impact detection
         keywords = ["chopped", "blast", "explosion", "axe", "hit", "shaking", "blood", "cut", 
                     "attacked", "stabbed", "slashed", "lunged", "stomped", "shouted", "screamed"]
         self.is_impact = any(kw in self.text.lower() for kw in keywords)
         
-        # Panel aspect ratio and layout mode
-        self.ratio = self.orig_h / self.orig_w
-        self.is_tall = self.ratio > 1.8
+        # Load, precompute background/vignette, pre-scale, and discard original image
+        with Image.open(orig_image_path) as img:
+            orig_img = img.convert('RGB')
+            self.orig_w, self.orig_h = orig_img.size
+            
+            # Precompute background and vignette using high-res original
+            self.bg_blurred = create_blurred_background(orig_img, target_width, target_height)
+            self.vignette_alpha = create_vignette_alpha_mask(target_width, target_height)
+            
+            # Panel aspect ratio and layout mode
+            self.ratio = self.orig_h / self.orig_w
+            self.is_tall = self.ratio > 1.8
+            
+            # Precompute fitting/base scaled panel once using high-quality Resampling.LANCZOS.
+            # This avoids resizing the huge original raw image on every single frame.
+            if self.is_tall:
+                self.panel_w = 540
+                self.scale_factor = self.panel_w / self.orig_w
+                self.panel_h = int(self.orig_h * self.scale_factor)
+                self.scaled_panel = orig_img.resize((self.panel_w, self.panel_h), Image.Resampling.LANCZOS)
+            else:
+                self.panel_h = self.target_height
+                self.scale_factor = self.panel_h / self.orig_h
+                self.panel_w = int(self.orig_w * self.scale_factor)
+                
+                if self.panel_w > self.target_width:
+                    self.panel_w = self.target_width
+                    self.scale_factor = self.panel_w / self.orig_w
+                    self.panel_h = int(self.orig_h * self.scale_factor)
+                
+                self.scaled_panel = orig_img.resize((self.panel_w, self.panel_h), Image.Resampling.LANCZOS)
         
+        # Original high-res Image handle is closed and freed at this point, saving significant RAM.
+
         # Particles
         self.particles = []
         rng = random.Random(scene_idx + 1000)
@@ -106,8 +130,6 @@ class SceneFrameGenerator:
                     (220, 225, 235)
                 ])
             })
-            
-        pass
 
     def make_frame(self, t):
         # 1. Start with the desaturated blurred background
@@ -126,65 +148,40 @@ class SceneFrameGenerator:
             shake_y = int(math.cos(t * 80) * 8)
         
         if self.is_tall:
-            # Layout vertical panel: scroll from top to bottom
-            panel_w = 540
-            scale_factor = panel_w / self.orig_w
-            panel_h = int(self.orig_h * scale_factor)
-            
-            scaled_panel = self.orig_img.resize((panel_w, panel_h), Image.Resampling.LANCZOS)
-            
-            max_scroll = panel_h - self.target_height
+            max_scroll = self.panel_h - self.target_height
             y_offset = int(max_scroll * progress) if max_scroll > 0 else 0
                 
-            visible_panel = scaled_panel.crop((0, y_offset, panel_w, y_offset + self.target_height))
+            # Crop directly from the pre-scaled panel (instantaneous!)
+            visible_panel = self.scaled_panel.crop((0, y_offset, self.panel_w, y_offset + self.target_height))
             
-            x_pos = (self.target_width - panel_w) // 2
+            x_pos = (self.target_width - self.panel_w) // 2
             frame.paste(visible_panel, (x_pos + shake_x, shake_y))
             
             # Draw thin vertical borders (dark gray)
             draw.line([(x_pos, 0), (x_pos, self.target_height)], fill=(15, 15, 15), width=3)
-            draw.line([(x_pos + panel_w, 0), (x_pos + panel_w, self.target_height)], fill=(15, 15, 15), width=3)
+            draw.line([(x_pos + self.panel_w, 0), (x_pos + self.panel_w, self.target_height)], fill=(15, 15, 15), width=3)
             
         else:
-            # Layout horizontal/square panel: zoom-in
-            panel_h = self.target_height
-            scale_factor = panel_h / self.orig_h
-            panel_w = int(self.orig_w * scale_factor)
+            zoom = 1.0 + 0.08 * progress
+            z_w = int(self.panel_w * zoom)
+            z_h = int(self.panel_h * zoom)
             
-            if panel_w > self.target_width:
-                panel_w = self.target_width
-                scale_factor = panel_w / self.orig_w
-                panel_h = int(self.orig_h * scale_factor)
-                
-                zoom = 1.0 + 0.08 * progress
-                z_w = int(panel_w * zoom)
-                z_h = int(panel_h * zoom)
-                
-                scaled_panel = self.orig_img.resize((z_w, z_h), Image.Resampling.LANCZOS)
-                x_crop = (z_w - panel_w) // 2
-                y_crop = (z_h - panel_h) // 2
-                visible_panel = scaled_panel.crop((x_crop, y_crop, x_crop + panel_w, y_crop + panel_h))
-                
-                y_pos = (self.target_height - panel_h) // 2
+            # Resize from pre-scaled panel instead of original image using fast Resampling.BILINEAR
+            zoomed_panel = self.scaled_panel.resize((z_w, z_h), Image.Resampling.BILINEAR)
+            x_crop = (z_w - self.panel_w) // 2
+            y_crop = (z_h - self.panel_h) // 2
+            visible_panel = zoomed_panel.crop((x_crop, y_crop, x_crop + self.panel_w, y_crop + self.panel_h))
+            
+            if self.panel_w == self.target_width:
+                y_pos = (self.target_height - self.panel_h) // 2
                 frame.paste(visible_panel, (shake_x, y_pos + shake_y))
-                
                 draw.line([(0, y_pos), (self.target_width, y_pos)], fill=(15, 15, 15), width=3)
-                draw.line([(0, y_pos + panel_h), (self.target_width, y_pos + panel_h)], fill=(15, 15, 15), width=3)
+                draw.line([(0, y_pos + self.panel_h), (self.target_width, y_pos + self.panel_h)], fill=(15, 15, 15), width=3)
             else:
-                zoom = 1.0 + 0.08 * progress
-                z_w = int(panel_w * zoom)
-                z_h = int(panel_h * zoom)
-                
-                scaled_panel = self.orig_img.resize((z_w, z_h), Image.Resampling.LANCZOS)
-                x_crop = (z_w - panel_w) // 2
-                y_crop = (z_h - panel_h) // 2
-                visible_panel = scaled_panel.crop((x_crop, y_crop, x_crop + panel_w, y_crop + panel_h))
-                
-                x_pos = (self.target_width - panel_w) // 2
+                x_pos = (self.target_width - self.panel_w) // 2
                 frame.paste(visible_panel, (x_pos + shake_x, shake_y))
-                
                 draw.line([(x_pos, 0), (x_pos, self.target_height)], fill=(15, 15, 15), width=3)
-                draw.line([(x_pos + panel_w, 0), (x_pos + panel_w, self.target_height)], fill=(15, 15, 15), width=3)
+                draw.line([(x_pos + self.panel_w, 0), (x_pos + self.panel_w, self.target_height)], fill=(15, 15, 15), width=3)
                 
         # 2. Paste Vignette
         frame.paste((0, 0, 0), (0, 0), mask=self.vignette_alpha)
@@ -207,27 +204,28 @@ class SceneFrameGenerator:
 
 
 def make_static_frame(orig_image_path, target_width=1280, target_height=720):
-    orig_img = Image.open(orig_image_path).convert('RGB')
-    orig_w, orig_h = orig_img.size
-    
-    # Calculate scale factor to fit within target dimensions preserving aspect ratio
-    scale = min(target_width / orig_w, target_height / orig_h)
-    new_w = int(orig_w * scale)
-    new_h = int(orig_h * scale)
-    
-    resized = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    
-    # Create black canvas
-    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
-    # Paste centered
-    x_pos = (target_width - new_w) // 2
-    y_pos = (target_height - new_h) // 2
-    canvas.paste(resized, (x_pos, y_pos))
-    
-    return np.array(canvas)
+    with Image.open(orig_image_path) as img:
+        orig_img = img.convert('RGB')
+        orig_w, orig_h = orig_img.size
+        
+        # Calculate scale factor to fit within target dimensions preserving aspect ratio
+        scale = min(target_width / orig_w, target_height / orig_h)
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        
+        resized = orig_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        
+        # Create black canvas
+        canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
+        # Paste centered
+        x_pos = (target_width - new_w) // 2
+        y_pos = (target_height - new_h) // 2
+        canvas.paste(resized, (x_pos, y_pos))
+        
+        return np.array(canvas)
 
 
-def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out=None, fps=30, split_scenes=False, split_out_dir=None):
+def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out=None, fps=30, split_scenes=False, split_out_dir=None, target_width=None, target_height=None):
     if timeline_path is None:
         timeline_path = TIMELINE_PATH
     if image_dir is None:
@@ -237,7 +235,29 @@ def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out
     if video_out is None:
         video_out = VIDEO_OUT
 
-    print("[*] Starting Upgraded Phase 4: Multi-Threaded Video Assembly...")
+    # Load defaults from config.json if available
+    if target_width is None or target_height is None:
+        import json
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        loaded_width = 1280
+        loaded_height = 720
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+                    quality = config_data.get("render_quality", "720p (HD)")
+                    if "1080p" in quality:
+                        loaded_width, loaded_height = 1920, 1080
+                    elif "480p" in quality:
+                        loaded_width, loaded_height = 854, 480
+            except Exception:
+                pass
+        if target_width is None:
+            target_width = loaded_width
+        if target_height is None:
+            target_height = loaded_height
+
+    print(f"[*] Starting Upgraded Phase 4: Video Assembly ({target_width}x{target_height})...")
 
     try:
         timeline = load_timeline(timeline_path)
@@ -265,7 +285,7 @@ def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out
                 duration = audio_clip.duration
                 
                 # Make static frame
-                frame_np = make_static_frame(orig_image_path)
+                frame_np = make_static_frame(orig_image_path, target_width=target_width, target_height=target_height)
                 img_clip = VideoClip(lambda t: frame_np).with_duration(duration)
                 img_clip = img_clip.with_audio(audio_clip)
                 
@@ -316,7 +336,7 @@ def assemble_video(timeline_path=None, image_dir=None, audio_dir=None, video_out
             audio_clip = AudioFileClip(audio_path)
             duration = audio_clip.duration
 
-            gen = SceneFrameGenerator(orig_image_path, scene.get("text", ""), duration, idx)
+            gen = SceneFrameGenerator(orig_image_path, scene.get("text", ""), duration, idx, target_width=target_width, target_height=target_height)
             img_clip = VideoClip(gen.make_frame).with_duration(duration)
             img_clip = img_clip.with_audio(audio_clip)
 

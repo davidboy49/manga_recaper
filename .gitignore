@@ -6,6 +6,7 @@ __pycache__/
 # Local configuration files
 .env
 .env*
+config.json
 
 # Large media files and build outputs
 *.mp4
@@ -15,3 +16,5 @@ manga_panel*/
 script_*.txt
 scene_catalog*.json
 timeline_map*.json
+mapped_output_2/
+split_scenes/

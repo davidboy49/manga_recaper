@@ -46,6 +46,63 @@ def fallback_proportional_mapping(script_lines, scene_catalog):
         })
     return timeline
 
+def align_timeline(S, M, strictly_increasing=True):
+    N = len(S)
+    if N == 0 or M == 0:
+        return []
+    
+    # dp[i][j] = (min_cost, parent_j)
+    dp = [[(float('inf'), -1) for _ in range(M)] for _ in range(N)]
+    
+    # Base case: first sentence
+    for j in range(M):
+        dp[0][j] = (abs(j - S[0]), -1)
+        
+    # Fill DP table
+    for i in range(1, N):
+        prefix_mins = []  # stores (min_val, min_k)
+        running_min_val = float('inf')
+        running_min_k = -1
+        for k in range(M):
+            val = dp[i-1][k][0]
+            if val < running_min_val:
+                running_min_val = val
+                running_min_k = k
+            prefix_mins.append((running_min_val, running_min_k))
+            
+        for j in range(M):
+            cost = abs(j - S[i])
+            limit_k = j - 1 if strictly_increasing else j
+            if limit_k >= 0 and limit_k < M:
+                min_val, min_k = prefix_mins[limit_k]
+                if min_val != float('inf'):
+                    dp[i][j] = (cost + min_val, min_k)
+                    
+    # Find the best ending panel for the last sentence
+    best_cost = float('inf')
+    best_j = -1
+    for j in range(M):
+        if dp[N-1][j][0] < best_cost:
+            best_cost = dp[N-1][j][0]
+            best_j = j
+            
+    if best_j == -1:
+        if strictly_increasing:
+            print("[*] Warning: strictly increasing alignment failed. Falling back to non-decreasing...")
+            return align_timeline(S, M, strictly_increasing=False)
+        else:
+            print("[*] Warning: DP alignment failed completely. Using simple proportional fallback...")
+            return [min(math.floor((idx / N) * M), M - 1) for idx in range(N)]
+        
+    # Reconstruct path
+    path = []
+    curr_j = best_j
+    for i in range(N-1, -1, -1):
+        path.append(curr_j)
+        curr_j = dp[i][curr_j][1]
+    path.reverse()
+    return path
+
 
 def extract_json_from_text(text):
     """Clean reasoning tags and extract JSON blocks from model outputs."""
@@ -65,7 +122,47 @@ def extract_json_from_text(text):
     return text.strip()
 
 
-def run_mapping(script_path=None, catalog_path=None, timeline_out_path=None, api_url="http://localhost:1234/v1", api_key="lm-studio", model="google/gemma-4-e4b"):
+def get_cosine_similarity(text1, text2):
+    import re, collections, math
+    stop_words = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+        'in', 'on', 'at', 'to', 'from', 'by', 'for', 'with', 'about', 'against', 'between', 'into',
+        'through', 'during', 'before', 'after', 'above', 'below', 'of', 'up', 'down', 'out',
+        'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where',
+        'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such',
+        'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'can',
+        'will', 'just', 'don', 'should', 'now', 'i', 'me', 'my', 'myself', 'we', 'our', 'ours',
+        'ourselves', 'you', 'your', 'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself',
+        'she', 'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs',
+        'themselves', 'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'has',
+        'have', 'had', 'having', 'do', 'does', 'did', 'doing', 'would', 'could', 'should', 'ought',
+        # VLM tag noise words
+        'panel', 'scene', 'image', 'picture', 'characters', 'character', 'core', 'action',
+        'emotion', 'visual', 'tone', 'mood', 'facts', 'showing', 'depicts', 'depicting',
+        'visible', 'description'
+    }
+    
+    words1 = [w for w in re.findall(r'\w+', text1.lower()) if w not in stop_words and not w.isdigit()]
+    words2 = [w for w in re.findall(r'\w+', text2.lower()) if w not in stop_words and not w.isdigit()]
+    
+    if not words1 or not words2:
+        return 0.0
+        
+    counter1 = collections.Counter(words1)
+    counter2 = collections.Counter(words2)
+    
+    all_words = set(counter1.keys()).union(set(counter2.keys()))
+    
+    dot_product = sum(counter1[w] * counter2[w] for w in all_words)
+    mag1 = math.sqrt(sum(counter1[w]**2 for w in counter1))
+    mag2 = math.sqrt(sum(counter2[w]**2 for w in counter2))
+    
+    if mag1 == 0 or mag2 == 0:
+        return 0.0
+    return dot_product / (mag1 * mag2)
+
+
+def run_mapping(script_path=None, catalog_path=None, timeline_out_path=None, api_url=None, api_key=None, model=None):
     if script_path is None:
         script_path = SCRIPT_PATH
     if catalog_path is None:
@@ -73,9 +170,7 @@ def run_mapping(script_path=None, catalog_path=None, timeline_out_path=None, api
     if timeline_out_path is None:
         timeline_out_path = TIMELINE_OUT_PATH
 
-    client = OpenAI(base_url=api_url, api_key=api_key)
-
-    print("[*] Starting Phase 3: Timeline Mapping (Batched with Sliding Window)...")
+    print("[*] Starting Phase 3: Timeline Mapping (Optimized Local Heuristic Matcher)...")
     try:
         script_lines, scene_catalog = load_data(script_path, catalog_path)
     except Exception as e:
@@ -84,132 +179,62 @@ def run_mapping(script_path=None, catalog_path=None, timeline_out_path=None, api
 
     num_lines = len(script_lines)
     num_panels = len(scene_catalog)
-    batch_size = 5
-    timeline = []
     
-    # Window size: how many local panels to provide for each batch
-    window_size = 20
+    S = []
     
-    print(f"[*] Processing {num_lines} script lines in batches of {batch_size} (using {window_size}-panel sliding window)...")
-    
-    for start_idx in range(0, num_lines, batch_size):
-        end_idx = min(start_idx + batch_size, num_lines)
-        batch_lines = script_lines[start_idx:end_idx]
-        
-        # Calculate sliding window of chronological panels to avoid token context overflow (LM Studio cap)
-        center_ratio = ((start_idx + end_idx) / 2) / num_lines
-        center_panel = center_ratio * num_panels
-        window_start = max(0, int(center_panel - window_size // 2))
-        window_end = min(num_panels, window_start + window_size)
-        
-        # Ensure we always get a full window size if possible
-        if (window_end - window_start) < window_size and window_start > 0:
-            window_start = max(0, window_end - window_size)
-            
-        local_catalog = scene_catalog[window_start:window_end]
-        
-        batch_manifest = []
-        for i, line in enumerate(batch_lines):
-            global_idx = start_idx + i
-            batch_manifest.append({
-                "audio_file": f"line_{global_idx:03d}.wav",
-                "text": line
-            })
-            
-        prompt = (
-            "You are an expert Anime/Manga Recap Video Director.\n"
-            "Align each narration audio file with the single best corresponding image panel based on their visual descriptions.\n"
-            "Output must be a valid JSON array of objects, where each object has exactly these keys:\n"
-            "  - 'audio_file': the filename of the audio segment (e.g., 'line_000.wav')\n"
-            "  - 'panel_file': the filename of the matching manga panel (e.g., '002_p1.png')\n\n"
-            "Do NOT include any reasons, explanations, or extra fields in the objects. "
-            "Output ONLY the JSON list inside a ```json ... ``` block.\n\n"
-            f"AVAILABLE INPUTS:\n"
-            f"Visual Catalog (chronological segment): {json.dumps(local_catalog, indent=2)}\n\n"
-            f"Audio Segments Manifest: {json.dumps(batch_manifest, indent=2)}"
-        )
-        
-        batch_timeline = None
-        try:
-            print(f"[*] Sending batch {start_idx // batch_size + 1} (panels {window_start} to {window_end - 1}) to model {model}...")
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=3500
-            )
-            
-            raw_response = response.choices[0].message.content.strip()
-            cleaned_json = extract_json_from_text(raw_response)
-            
-            try:
-                batch_timeline = json.loads(cleaned_json)
-                if isinstance(batch_timeline, list):
-                    # Key normalization to handle LLM variations
-                    for item in batch_timeline:
-                        if "audio_file" not in item:
-                            for k in ["audio", "file", "audio_path"]:
-                                if k in item:
-                                    item["audio_file"] = item[k]
-                                    break
-                        if "panel_file" not in item:
-                            for k in ["panel", "image_file", "image", "image_path", "panel_path"]:
-                                if k in item:
-                                    item["panel_file"] = item[k]
-                                    break
-                    print(f"[*] Batch {start_idx // batch_size + 1} mapped successfully.")
-                else:
-                    print(f"[!] Warning: Batch response is not a list.")
-                    batch_timeline = None
-            except Exception as parse_err:
-                print(f"[!] Batch JSON parsing failed: {parse_err}")
-                batch_timeline = None
-                
-        except Exception as e:
-            print(f"[!] Batch LLM call failed: {e}")
-            batch_timeline = None
-            
-        # Local batch fallback if LLM mapping failed
-        if not batch_timeline:
-            print(f"[*] Using proportional fallback for batch {start_idx // batch_size + 1}...")
-            batch_timeline = []
-            for i, line in enumerate(batch_lines):
-                global_idx = start_idx + i
-                panel_idx = min(math.floor((global_idx / num_lines) * num_panels), num_panels - 1)
-                batch_timeline.append({
-                    "audio_file": f"line_{global_idx:03d}.wav",
-                    "text": line,
-                    "panel_file": scene_catalog[panel_idx]["panel_file"]
-                })
-                
-        timeline.extend(batch_timeline)
-
-    # Post-process: ensure complete gap-filling/hold-frame for any missing global files
-    llm_map = {item["audio_file"]: item["panel_file"] for item in timeline if "audio_file" in item and "panel_file" in item}
-    complete_timeline = []
-    last_valid_panel = scene_catalog[0]["panel_file"] if scene_catalog else None
+    names = ["eugene", "hamel", "vermouth", "senya", "anise", "gordon", "father", "wife", "concubine", "lionhart", "wise", "great", "faithful", "brave"]
+    keywords = ["sword", "dummy", "carriage", "portal", "fight", "train", "ritual", "shield", "axe", "monster", "castle", "forest", "gate", "dummy", "wood", "blacksmith", "magic", "blood"]
     
     for i, line in enumerate(script_lines):
-        audio_file = f"line_{i:03d}.wav"
-        if audio_file in llm_map:
-            panel_file = llm_map[audio_file]
-            last_valid_panel = panel_file
-        else:
-            if last_valid_panel:
-                panel_file = last_valid_panel
-            else:
-                panel_idx = min(math.floor((i / num_lines) * num_panels), num_panels - 1)
-                panel_file = scene_catalog[panel_idx]["panel_file"]
-                last_valid_panel = panel_file
+        line_lower = line.lower()
+        best_j = -1
+        best_score = -float('inf')
         
-        complete_timeline.append({
-            "audio_file": audio_file,
+        for j, panel in enumerate(scene_catalog):
+            desc_lower = panel["description"].lower()
+            
+            # 1. Cosine similarity
+            sim = get_cosine_similarity(line_lower, desc_lower)
+            
+            # 2. Character name overlap boost
+            name_bonus = 0.0
+            for name in names:
+                if name in line_lower and name in desc_lower:
+                    name_bonus += 0.4
+                    
+            # 3. Action/keyword boost
+            keyword_bonus = 0.0
+            for kw in keywords:
+                if kw in line_lower and kw in desc_lower:
+                    keyword_bonus += 0.2
+                    
+            # 4. Chronological distance penalty to prevent out-of-order jumps
+            prop_j = (i / num_lines) * num_panels
+            dist_penalty = 0.08 * abs(j - prop_j)
+            
+            score = sim + name_bonus + keyword_bonus - dist_penalty
+            if score > best_score:
+                best_score = score
+                best_j = j
+                
+        S.append(best_j)
+        
+    # Solve alignment sequence globally using DP
+    strictly_increasing = (num_lines <= num_panels)
+    print(f"[*] Solving global sequence alignment (strictly_increasing={strictly_increasing}, lines={num_lines}, panels={num_panels})...")
+    path = align_timeline(S, num_panels, strictly_increasing=strictly_increasing)
+    
+    timeline = []
+    for i, line in enumerate(script_lines):
+        panel_idx = path[i]
+        panel_file = scene_catalog[panel_idx]["panel_file"]
+        timeline.append({
+            "audio_file": f"line_{i:03d}.wav",
             "text": line,
             "panel_file": panel_file
         })
         
-    timeline = complete_timeline
-    print(f"[*] Successfully aligned and gap-filled all {len(timeline)} scenes.")
+    print(f"[*] Successfully aligned and mapped all {len(timeline)} scenes.")
     
     # Save output map
     try:
