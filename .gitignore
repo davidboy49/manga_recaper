@@ -20,4 +20,5 @@ mapped_output_2/
 split_scenes/
 build/
 dist/
+dist-setup/
 *.spec
