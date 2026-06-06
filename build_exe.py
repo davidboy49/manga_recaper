@@ -51,7 +51,9 @@ def main():
     # Step 4: Run PyInstaller build
     print("[*] Executing PyInstaller build process...")
     pyinstaller_cmd = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--noconfirm",
         "--onedir",
         "--windowed",
