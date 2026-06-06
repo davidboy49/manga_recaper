@@ -1,5 +1,12 @@
 import os
 import sys
+
+# Redirection of standard streams to prevent loguru failure in windowed/noconsole mode
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 import json
 import threading
 import winsound
