@@ -60,6 +60,7 @@ def main():
         f"--icon={TARGET_ICO}",
         "--name=MangaRecapEditor",
         "--collect-all=customtkinter",
+        "--collect-all=language_tags",
         os.path.join(PROJECT_ROOT, "gui.py")
     ]
     
